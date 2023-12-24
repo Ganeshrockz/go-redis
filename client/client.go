@@ -3,11 +3,21 @@ package client
 import (
 	"fmt"
 	"syscall"
+
+	"github.com/ganeshrockz/go-redis/protocol"
 )
 
-const bufferSize = 1024
+type Client struct {
+	protocol protocol.Protocol
+}
 
-func RunClient() {
+func New() *Client {
+	return &Client{
+		protocol: protocol.NewMsgLenProtocol(),
+	}
+}
+
+func (c *Client) Run() {
 	fmt.Println("Starting Client...")
 	// Create a socket for IPV4 and TCP connections
 	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
@@ -25,29 +35,35 @@ func RunClient() {
 		panic(fmt.Sprintf("unable to connect to socket %s", err.Error()))
 	}
 
-	msg := "Hello server"
-	n, err := syscall.Write(fd, []byte(msg))
+	defer func() {
+		if err = syscall.Close(fd); err != nil {
+			panic(fmt.Sprintf("error closing connection %s\n", err.Error()))
+		}
+	}()
+
+	if err = c.query(fd, "hello1"); err != nil {
+		panic(fmt.Sprintf("talking to server %s", err.Error()))
+	}
+
+	if err = c.query(fd, "hello2"); err != nil {
+		panic(fmt.Sprintf("talking to server %s", err.Error()))
+	}
+
+	if err = c.query(fd, "hello3"); err != nil {
+		panic(fmt.Sprintf("talking to server %s", err.Error()))
+	}
+}
+
+func (c *Client) query(fd int, resp string) error {
+	if err := c.protocol.Write(fd, resp); err != nil {
+		return fmt.Errorf("writing to file descriptor %w", err)
+	}
+
+	data, err := c.protocol.Read(fd)
 	if err != nil {
-		panic(fmt.Sprintf("writing response %s", err.Error()))
+		return fmt.Errorf("reading from file descriptor %w", err)
 	}
 
-	if n < 0 {
-		panic("write error")
-	}
-
-	resp := make([]byte, bufferSize)
-	n, err = syscall.Read(fd, resp)
-	if err != nil {
-		panic(fmt.Sprintf("reading response %s", err.Error()))
-	}
-
-	if n < 0 {
-		panic("read error")
-	}
-
-	fmt.Printf("Server says %s\n", string(resp))
-
-	if err = syscall.Close(fd); err != nil {
-		panic(fmt.Sprintf("error closing connection %s\n", err.Error()))
-	}
+	fmt.Printf("server says: %s\n", string(data))
+	return nil
 }

@@ -3,12 +3,23 @@ package server
 import (
 	"fmt"
 	"syscall"
-)
 
-const bufferSize = 1024
+	"github.com/ganeshrockz/go-redis/protocol"
+)
 
 type Server struct {
 	SignalCh chan struct{}
+	ErrCh    chan error
+
+	protocol protocol.Protocol
+}
+
+func New() *Server {
+	return &Server{
+		SignalCh: make(chan struct{}),
+		ErrCh:    make(chan error),
+		protocol: protocol.NewMsgLenProtocol(),
+	}
 }
 
 func (s *Server) RunServer() {
@@ -39,46 +50,44 @@ func (s *Server) RunServer() {
 	for {
 		connFd, _, err := syscall.Accept(fd)
 		if err != nil {
-			fmt.Printf("error accepting request %s\n", err.Error())
+			s.ErrCh <- fmt.Errorf("error accepting request %w", err)
 			continue
 		}
 
 		if connFd < 0 {
-			fmt.Printf("fd cannot be less than zero for a new connection\n")
+			s.ErrCh <- fmt.Errorf("fd cannot be less than zero for a new connection")
 			continue
 		}
 
-		if err = handleConnection(connFd); err != nil {
-			fmt.Printf("error handling connection %s", err.Error())
+		if err = s.handleConnection(connFd); err != nil {
+			s.ErrCh <- fmt.Errorf("error handling connection %w", err)
 		}
 
 		if err = syscall.Close(connFd); err != nil {
-			fmt.Printf("error closing connection %s\n", err.Error())
+			s.ErrCh <- fmt.Errorf("error closing connection %w", err)
 		}
 	}
 }
 
-func handleConnection(fd int) error {
-	data := make([]byte, bufferSize)
-	n, err := syscall.Read(fd, data)
-	if err != nil {
-		return fmt.Errorf("reading file descriptor %w", err)
+func (s *Server) handleConnection(fd int) error {
+	for {
+		if err := s.serverSingleRequest(fd); err != nil {
+			return err
+		}
 	}
+}
 
-	if n < 0 {
-		return fmt.Errorf("read error")
+func (s *Server) serverSingleRequest(fd int) error {
+	data, err := s.protocol.Read(fd)
+	if err != nil {
+		return fmt.Errorf("reading from file descriptor %w", err)
 	}
 
 	fmt.Printf("client says: %s\n", string(data))
 
-	data = []byte("response from server")
-	n, err = syscall.Write(fd, data)
-	if err != nil {
-		return fmt.Errorf("writing response %w", err)
-	}
-
-	if n < 0 {
-		return fmt.Errorf("write error")
+	// Respond over the same connection
+	if err := s.protocol.Write(fd, "world"); err != nil {
+		return fmt.Errorf("error writing back to client %w", err)
 	}
 
 	return nil
