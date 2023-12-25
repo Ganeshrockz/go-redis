@@ -75,6 +75,11 @@ func readAll(fd int, n int) ([]byte, error) {
 		temp := make([]byte, n)
 		readBytes, err := syscall.Read(fd, temp)
 		if err != nil {
+			// This indicates that the fd is not ready
+			// to be read
+			if err == syscall.EAGAIN {
+				continue
+			}
 			return nil, fmt.Errorf("reading file descriptor %w", err)
 		}
 
@@ -104,7 +109,9 @@ func writeAll(fd int, data []byte, n int) error {
 
 		wroteBytes, err := syscall.Write(fd, temp)
 		if err != nil {
-			return fmt.Errorf("reading file descriptor %w", err)
+			// This indicates that the fd is not ready
+			// to be read
+			return fmt.Errorf("writing to file descriptor %w", err)
 		}
 
 		if wroteBytes <= 0 {

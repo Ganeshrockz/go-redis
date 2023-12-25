@@ -2,23 +2,23 @@ package server
 
 import (
 	"fmt"
+	"log"
 	"syscall"
 
-	"github.com/ganeshrockz/go-redis/protocol"
+	"github.com/ganeshrockz/go-redis/core/connection"
+	"github.com/ganeshrockz/go-redis/core/events"
+	"github.com/ganeshrockz/go-redis/core/poller"
 )
 
 type Server struct {
 	SignalCh chan struct{}
 	ErrCh    chan error
-
-	protocol protocol.Protocol
 }
 
 func New() *Server {
 	return &Server{
 		SignalCh: make(chan struct{}),
 		ErrCh:    make(chan error),
-		protocol: protocol.NewMsgLenProtocol(),
 	}
 }
 
@@ -45,50 +45,85 @@ func (s *Server) RunServer() {
 		panic("unable to listen on address")
 	}
 
+	// Signal that the server has started
 	close(s.SignalCh)
 
-	for {
-		connFd, _, err := syscall.Accept(fd)
-		if err != nil {
-			s.ErrCh <- fmt.Errorf("error accepting request %w", err)
-			continue
-		}
-
-		if connFd < 0 {
-			s.ErrCh <- fmt.Errorf("fd cannot be less than zero for a new connection")
-			continue
-		}
-
-		if err = s.handleConnection(connFd); err != nil {
-			s.ErrCh <- fmt.Errorf("error handling connection %w", err)
-		}
-
-		if err = syscall.Close(connFd); err != nil {
-			s.ErrCh <- fmt.Errorf("error closing connection %w", err)
-		}
-	}
-}
-
-func (s *Server) handleConnection(fd int) error {
-	for {
-		if err := s.serverSingleRequest(fd); err != nil {
-			return err
-		}
-	}
-}
-
-func (s *Server) serverSingleRequest(fd int) error {
-	data, err := s.protocol.Read(fd)
+	err = syscall.SetNonblock(fd, true)
 	if err != nil {
-		return fmt.Errorf("reading from file descriptor %w", err)
+		panic("unable to set server socket's fd to non blocking")
 	}
 
-	fmt.Printf("client says: %s\n", string(data))
-
-	// Respond over the same connection
-	if err := s.protocol.Write(fd, "world"); err != nil {
-		return fmt.Errorf("error writing back to client %w", err)
+	eventPoller := poller.NewPoller()
+	kq, err := eventPoller.Setup(fd)
+	if err != nil || kq == -1 {
+		panic("error setting up event poller")
 	}
 
-	return nil
+	connectionPool := connection.NewConnRegistry()
+
+	for {
+		eventsToHandle, err := eventPoller.Poll()
+		if err != nil {
+			s.signalServerErr(fmt.Errorf("error polling new events %w", err))
+		}
+		if eventsToHandle == nil {
+			log.Printf("no new events to poll")
+			continue
+		}
+
+		for _, event := range eventsToHandle {
+			if event.IsCloseEvent() {
+				if err := syscall.Close(int(event.EventFD())); err != nil {
+					s.signalServerErr(fmt.Errorf("error closing connection with fd %d: %w", event.EventFD(), err))
+				}
+			} else if event.EventFD() == uint64(fd) {
+				// Handling new connection
+				connFd, _, err := syscall.Accept(fd)
+				if err != nil {
+					s.signalServerErr(fmt.Errorf("error accepting request %w", err))
+					continue
+				}
+
+				if connFd < 0 {
+					s.signalServerErr(fmt.Errorf("fd cannot be less than zero for a new connection"))
+					continue
+				}
+
+				if err := connectionPool.Add(connection.NewConnection(connFd)); err != nil {
+					s.signalServerErr(err)
+					continue
+				}
+
+				socketEvent := events.NewKernelEvent(syscall.Kevent_t{
+					Ident:  uint64(connFd),
+					Filter: syscall.EVFILT_READ,
+					Flags:  syscall.EV_ADD,
+				})
+				registered, err := socketEvent.Register(kq)
+				if err != nil || !registered {
+					s.signalServerErr(fmt.Errorf("unable to register incoming connection's kevent"))
+					continue
+				}
+
+				err = syscall.SetNonblock(connFd, true)
+				if err != nil {
+					panic("unable to set client connection's socket fd to non blocking")
+				}
+			} else if event.IsReadEvent() {
+				conn, err := connectionPool.Retrieve(int(event.EventFD()))
+				if err != nil {
+					s.signalServerErr(err)
+					continue
+				}
+
+				if err = conn.Handle(); err != nil {
+					s.signalServerErr(fmt.Errorf("error handling connection %w", err))
+				}
+			}
+		}
+	}
+}
+
+func (s *Server) signalServerErr(err error) {
+	s.ErrCh <- err
 }

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"syscall"
 
-	"github.com/ganeshrockz/go-redis/protocol"
+	"github.com/ganeshrockz/go-redis/core/protocol"
 )
 
 type Client struct {
@@ -41,16 +41,28 @@ func (c *Client) Run() {
 		}
 	}()
 
-	if err = c.query(fd, "hello1"); err != nil {
+	if err = c.req(fd, "hello1"); err != nil {
 		panic(fmt.Sprintf("talking to server %s", err.Error()))
 	}
 
-	if err = c.query(fd, "hello2"); err != nil {
+	if err = c.req(fd, "hello2"); err != nil {
 		panic(fmt.Sprintf("talking to server %s", err.Error()))
 	}
 
-	if err = c.query(fd, "hello3"); err != nil {
+	if err = c.req(fd, "hello3"); err != nil {
 		panic(fmt.Sprintf("talking to server %s", err.Error()))
+	}
+
+	if err = c.res(fd); err != nil {
+		panic(fmt.Sprintf("reading from server %s", err.Error()))
+	}
+
+	if err = c.res(fd); err != nil {
+		panic(fmt.Sprintf("reading from server %s", err.Error()))
+	}
+
+	if err = c.res(fd); err != nil {
+		panic(fmt.Sprintf("reading from server %s", err.Error()))
 	}
 }
 
@@ -59,6 +71,23 @@ func (c *Client) query(fd int, resp string) error {
 		return fmt.Errorf("writing to file descriptor %w", err)
 	}
 
+	data, err := c.protocol.Read(fd)
+	if err != nil {
+		return fmt.Errorf("reading from file descriptor %w", err)
+	}
+
+	fmt.Printf("server says: %s\n", string(data))
+	return nil
+}
+
+func (c *Client) req(fd int, resp string) error {
+	if err := c.protocol.Write(fd, resp); err != nil {
+		return fmt.Errorf("writing to file descriptor %w", err)
+	}
+	return nil
+}
+
+func (c *Client) res(fd int) error {
 	data, err := c.protocol.Read(fd)
 	if err != nil {
 		return fmt.Errorf("reading from file descriptor %w", err)
