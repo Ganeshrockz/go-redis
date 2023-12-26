@@ -3,6 +3,7 @@ package client
 import (
 	"fmt"
 	"syscall"
+	"time"
 
 	"github.com/ganeshrockz/go-redis/core/protocol"
 )
@@ -13,7 +14,7 @@ type Client struct {
 
 func New() *Client {
 	return &Client{
-		protocol: protocol.NewMsgLenProtocol(),
+		protocol: protocol.NewRESPProtocol(),
 	}
 }
 
@@ -41,29 +42,39 @@ func (c *Client) Run() {
 		}
 	}()
 
-	if err = c.req(fd, "hello1"); err != nil {
+	if err = c.req(fd, "+PING\r\n"); err != nil {
 		panic(fmt.Sprintf("talking to server %s", err.Error()))
 	}
 
-	if err = c.req(fd, "hello2"); err != nil {
+	if err = c.req(fd, "$12\r\nAmit Shekhar\r\n"); err != nil {
 		panic(fmt.Sprintf("talking to server %s", err.Error()))
 	}
 
-	if err = c.req(fd, "hello3"); err != nil {
+	if err = c.req(fd, ":10\r\n"); err != nil {
 		panic(fmt.Sprintf("talking to server %s", err.Error()))
 	}
 
-	if err = c.res(fd); err != nil {
-		panic(fmt.Sprintf("reading from server %s", err.Error()))
+	if err = c.req(fd, "*3\r\n$3\r\nSET\r\n$5\r\nmykey\r\n$7\r\nmyvalue\r\n"); err != nil {
+		panic(fmt.Sprintf("talking to server %s", err.Error()))
 	}
 
-	if err = c.res(fd); err != nil {
-		panic(fmt.Sprintf("reading from server %s", err.Error()))
+	if err = c.req(fd, "*2\r\n$3\r\nGET\r\n$5\r\nmykey\r\n"); err != nil {
+		panic(fmt.Sprintf("talking to server %s", err.Error()))
 	}
 
-	if err = c.res(fd); err != nil {
-		panic(fmt.Sprintf("reading from server %s", err.Error()))
-	}
+	time.Sleep(10 * time.Second)
+
+	// if err = c.res(fd); err != nil {
+	// 	panic(fmt.Sprintf("reading from server %s", err.Error()))
+	// }
+
+	// if err = c.res(fd); err != nil {
+	// 	panic(fmt.Sprintf("reading from server %s", err.Error()))
+	// }
+
+	// if err = c.res(fd); err != nil {
+	// 	panic(fmt.Sprintf("reading from server %s", err.Error()))
+	// }
 }
 
 func (c *Client) query(fd int, resp string) error {

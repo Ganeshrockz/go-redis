@@ -1,36 +1,29 @@
 package main
 
 import (
-	"fmt"
+	"log"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 
-	"github.com/ganeshrockz/go-redis/client"
 	"github.com/ganeshrockz/go-redis/server"
 )
 
 func main() {
-	server := server.New()
-	go server.RunServer()
-
-	<-server.SignalCh
+	var sigs chan os.Signal = make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(1)
+
+	server := server.New(&wg, sigs)
+	go server.RunServer()
 	go func() {
-		//defer wg.Done()
 		for err := range server.ErrCh {
-			fmt.Println("error running server " + err.Error())
+			log.Printf("error running server " + err.Error())
 		}
 	}()
 
-	// Run concurrent clients
-	go func() {
-		defer wg.Done()
-		client.New().Run()
-	}()
-	go func() {
-		defer wg.Done()
-		client.New().Run()
-	}()
 	wg.Wait()
 	close(server.ErrCh)
 }
